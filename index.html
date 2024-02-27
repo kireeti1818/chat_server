@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>WebSocket Client</title>
+    </head>
+    <body>
+        <script>
+            // Create a new WebSocket instance
+            const socket = new WebSocket('ws://localhost:18185'); // server is running locally on port 8080
+            
+            // Event listener for when the connection is established
+            socket.onopen = function(event) {
+                console.log('WebSocket connection established.');
+                
+                // You can now send data to the server
+                socket.send('Hello, server!');
+            };
+            
+        </script>
+    </body>
+</html>
