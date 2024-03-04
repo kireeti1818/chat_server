@@ -24,6 +24,8 @@ char *webSocketGUID= "258EAFA5-E914-47DA-95CA-C5AB0DC85B11\0";
 char *address="127.0.0.1";
 
 
+pthread_mutex_t client_fds_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 //Encodes a binary safe base 64 string
 void Base64Encode(char *client_key, char *accept_key) 
 { 
@@ -84,7 +86,6 @@ void mask_extract(char * mask_Key,int index,uint8_t *buffer)
 }
 
 
-
 uint8_t * decode_websocket_frame(uint8_t  *buffer, int len,int fd)
 {
     int firstByte = *(buffer+1);
@@ -132,12 +133,12 @@ uint8_t * decode_websocket_frame(uint8_t  *buffer, int len,int fd)
         {
             printf("opcode\n");
             handle_ping(buffer,payload_Length,fd);
-            return ;
+            return NULL;
         }
         else if(opcode == 0x8)
         {
             close(fd);
-            return ;
+            return NULL;
         }
         message = (uint8_t *)malloc((payload_Length + 1) * sizeof(uint8_t));
         // uint8_t message[payload_Length+1];
@@ -147,13 +148,42 @@ uint8_t * decode_websocket_frame(uint8_t  *buffer, int len,int fd)
             *(message+i)= *(buffer+i+payload_start) ^ mask_Key[i%4];
         }
         printf("\n");
-        printf("Recieved Message : %s\n",message);
     }
     
     return message;
 }
 
+// Function to encode a complete WebSocket frame
+int encode_websocket_frame (uint8_t fin,uint8_t opcode,uint64_t payload_length, uint8_t *payload,uint8_t *frame) 
+{
+    // Calculate header size based on payload length
+    int header_size = 2;
+    frame[0] = (fin << 7) | (opcode & 0x0F); //129(1000 0001)
+    frame[1] = (0 << 7); 
+    if(payload_length <= 125){
+        frame[1] |= payload_length;
+    }else if(payload_length <= 65536){
+        frame[1] |= 126;
+        frame[2] = (payload_length >>  8) & 0xFF;
+        frame[3] = (payload_length      ) & 0xFF;
+        header_size += 2;
+    }else{
+        frame[1] |= 127;
+        frame[2] = (payload_length >> 56) & 0xFF;
+        frame[3] = (payload_length >> 48) & 0xFF;
+        frame[4] = (payload_length >> 40) & 0xFF;
+        frame[5] = (payload_length >> 32) & 0xFF;
+        frame[6] = (payload_length >> 24) & 0xFF;
+        frame[7] = (payload_length >> 16) & 0xFF;
+        frame[8] = (payload_length >>  8) & 0xFF;
+        frame[9] = (payload_length      ) & 0xFF;
+        header_size += 8;
+    }
 
+    // Copy payload after header
+    memcpy (frame + header_size, payload, payload_length);
+    return header_size + payload_length; // Total frame size
+}
 
 
 void handle_connection(int client_socket)
@@ -248,23 +278,39 @@ int socket_creation()
 
     return sockfd;
 }
-
-void broadcast_message(int client_socket)
+int send_websocket_frame (int client_socket, uint8_t fin, uint8_t opcode, char *payload) 
 {
+    uint8_t encoded_data [1024];
+    int encoded_size = encode_websocket_frame (fin, opcode, strlen (payload), (uint8_t *)payload, encoded_data);
+
+    ssize_t bytes_sent = send (client_socket, encoded_data, encoded_size, 0);
+    if (bytes_sent == -1) 
+    {
+        perror ("Send failed");
+        return -1;
+    }
+    return 0;
+}
+void broadcast_message(int client_socket,uint8_t *message)
+{
+    pthread_mutex_lock(&client_fds_mutex);
     int i=0;
     while(client_fds[i]!=-1)
     {
-        if(client_fds[i]==client_socket) continue;
-
-
+        if(client_fds[i]!=client_socket) {
+            send_websocket_frame (client_fds[i] ,1, 1, message);
+        }
+        i++;
     }
+    pthread_mutex_unlock(&client_fds_mutex);
 }
 
 void *handling_message(void * client_sock)
 {
+    pthread_mutex_lock(&client_fds_mutex);
     uint8_t buffer[1000];
     int client_socket = *((int *)client_sock);
-    //printf("%d\n",client_socket);
+    // printf("%d\n",client_socket);
     for(int ind =0;ind<MAX_CLIENTS;ind++)
     {
         if (client_fds[ind]==-1)
@@ -273,6 +319,8 @@ void *handling_message(void * client_sock)
             break;
         }
     }
+
+    pthread_mutex_unlock(&client_fds_mutex);
     while(1)
     {
         int received = recv(client_socket, buffer, 1000, 0);
@@ -280,20 +328,56 @@ void *handling_message(void * client_sock)
         if (received <= 0) 
         {
             printf("Connection closed by the client\n");
+            if(client_fds[MAX_CLIENTS-1]==client_socket)
+            {
+                client_fds[MAX_CLIENTS-1]=-1;
+            }
+            int flag=0;
+            int ind=0;
+            for(ind =0;ind<MAX_CLIENTS;ind++)
+            {
+                if (flag==1 && client_fds[ind+1]!=-1)
+                {
+                    client_fds[ind]=client_fds[ind+1];
+                    continue;
+                }
+                else if (flag==1 &&  client_fds[ind]==-1) 
+                {
+                    client_fds[ind]==-1;
+                    break;
+                }
+                else if (ind==MAX_CLIENTS-1) client_fds[MAX_CLIENTS-1]=-1;
+
+                if(client_fds[ind]==client_socket) flag=1;
+            }
             close(client_socket);
             break;
         } 
         else 
         {
             buffer[received] = '\0'; 
-            decode_websocket_frame(buffer, received, client_socket);
-            broadcast_message(client_socket);
+            uint8_t *message=decode_websocket_frame(buffer, received, client_socket);
+            printf("Recieved Message : %s\n",message);
+            broadcast_message(client_socket,message);
         }
     }
     close(client_socket);
     pthread_exit(NULL);
     return NULL;
 }
+
+
+
+char * get_username(int client_socket)
+{
+    uint8_t buffer[27];
+    int received = recv(client_socket, buffer, 1000, 0);
+    buffer[received] = '\0'; 
+    return decode_websocket_frame(buffer, received, client_socket);
+
+}
+
+
 
 int main()
 {
@@ -305,14 +389,17 @@ int main()
     
     while(1)
     {
-        
         if ((client_socket = accept(sockfd, (struct sockaddr *)&client, &len)) < 0)
         {
             printf("error while accepting");
             return 0;
         }
-
+ 
         handle_connection(client_socket);
+
+        char *username=get_username(client_socket);
+        printf("%s \n",username);
+
 
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, handling_message, (void *)&client_socket) < 0) {
