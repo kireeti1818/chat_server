@@ -18,7 +18,12 @@
 #define PORT 18185
 #define MAX_CLIENTS 1000
 
-int client_fds[MAX_CLIENTS] ;
+struct userStruct {
+    uint8_t *username;
+    int client_socket;
+};
+
+struct userStruct clients[MAX_CLIENTS];
 
 char *webSocketGUID= "258EAFA5-E914-47DA-95CA-C5AB0DC85B11\0"; 
 char *address="127.0.0.1";
@@ -29,7 +34,6 @@ pthread_mutex_t client_fds_mutex = PTHREAD_MUTEX_INITIALIZER;
 //Encodes a binary safe base 64 string
 void Base64Encode(char *client_key, char *accept_key) 
 { 
-
 
     char combined_key[1024];
     strcpy(combined_key, client_key);
@@ -63,7 +67,8 @@ void Base64Encode(char *client_key, char *accept_key)
 }
 
 
-
+//it will handles the ping which is sent by the client.
+//to know wheather the client is  still connected to server or not
 void handle_ping(uint8_t * buffer,long long length,int fd)
 {
     uint8_t pong_frame[128];
@@ -74,7 +79,7 @@ void handle_ping(uint8_t * buffer,long long length,int fd)
 }
 
 
-
+//it will extract the mask in the frame which is used in the decode_websocket_frame function
 void mask_extract(char * mask_Key,int index,uint8_t *buffer)
 {
     for(int i =index;i<index+4;i++)
@@ -85,7 +90,7 @@ void mask_extract(char * mask_Key,int index,uint8_t *buffer)
 
 }
 
-
+// decoding of frame is done here, which  is recieved from the client
 uint8_t * decode_websocket_frame(uint8_t  *buffer, int len,int fd)
 {
     int firstByte = *(buffer+1);
@@ -98,6 +103,7 @@ uint8_t * decode_websocket_frame(uint8_t  *buffer, int len,int fd)
         uint8_t mask_Key[5];
         mask_Key[4]='\0';
         int index,payload_start;
+
         if(payload_Length<=125)
         {
             index=2;
@@ -153,12 +159,11 @@ uint8_t * decode_websocket_frame(uint8_t  *buffer, int len,int fd)
     return message;
 }
 
-// Function to encode a complete WebSocket frame
+// Function to encode a complete WebSocket frame whcih will be sent to client
 int encode_websocket_frame (uint8_t fin,uint8_t opcode,uint64_t payload_length, uint8_t *payload,uint8_t *frame) 
 {
-    // Calculate header size based on payload length
     int header_size = 2;
-    frame[0] = (fin << 7) | (opcode & 0x0F); //129(1000 0001)
+    frame[0] = (fin << 7) | (opcode & 0x0F); 
     frame[1] = (0 << 7); 
     if(payload_length <= 125){
         frame[1] |= payload_length;
@@ -179,13 +184,11 @@ int encode_websocket_frame (uint8_t fin,uint8_t opcode,uint64_t payload_length, 
         frame[9] = (payload_length      ) & 0xFF;
         header_size += 8;
     }
-
-    // Copy payload after header
     memcpy (frame + header_size, payload, payload_length);
-    return header_size + payload_length; // Total frame size
+    return header_size + payload_length; 
 }
 
-
+// websocket handshake is done here
 void handle_connection(int client_socket)
 {
     char buff[10000];
@@ -220,8 +223,9 @@ void handle_connection(int client_socket)
 
     char response[1125] ;
     sprintf(response,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",encoded_hash);
-    printf("[+]connection esatablised\n");
-    printf("key : %s\n",websock_key);
+    printf("[+]client is connecting...\n\nSetting USERNAME\n\n");
+    printf("key : %s\n\n",websock_key);
+    printf("Setting USERNAME\n\n");
 
     int se=send(client_socket,response,strlen(response),0);
     if(se<0)
@@ -231,6 +235,7 @@ void handle_connection(int client_socket)
     }
 }
 
+//socket and binding are done here
 int socket_creation()
 {
     struct sockaddr_in server;
@@ -265,7 +270,7 @@ int socket_creation()
 		perror("sockaddr");
 		exit(0);
 	}
-	printf("[+]port binded to localhost \n");
+	printf("[+]port binded to localhost \n\n");
 
 	//make the specified socket a listening socket, allowing it to accept incoming connections.
 	//'1' indicates the maximum length of the queue of pending connections
@@ -291,31 +296,163 @@ int send_websocket_frame (int client_socket, uint8_t fin, uint8_t opcode, char *
     }
     return 0;
 }
-void broadcast_message(int client_socket,uint8_t *message)
+
+// Function to concatenate two uint8_t* strings with a delimiter
+uint8_t* concat_with_delimiter(uint8_t* str1, uint8_t* str2, const char* delimiter) {
+    int len1 = strlen((char*)str1);
+    int len2 = strlen((char*)str2);
+    int delim_len = strlen(delimiter);
+
+    uint8_t* result = (uint8_t*)malloc(len1 + delim_len + len2 + 1); 
+
+    if (result == NULL) {
+        printf("Memory allocation failed.\n");
+        return NULL;
+    }
+
+    strcpy((char*)result, (char*)str1);
+    strcat((char*)result, delimiter);
+    strcat((char*)result, (char*)str2);
+
+    return result;
+}
+
+
+//it will broadcast the message to everyone, clients which are connected to the server
+void broadcast_message(int client_socket,uint8_t *username,uint8_t *message)
 {
+    uint8_t* concatenated ;
+    concatenated = concat_with_delimiter(username, message, " - ");
     pthread_mutex_lock(&client_fds_mutex);
     int i=0;
-    while(client_fds[i]!=-1)
+    while(clients[i].client_socket!=-1)
     {
-        if(client_fds[i]!=client_socket) {
-            send_websocket_frame (client_fds[i] ,1, 1, message);
+        if(clients[i].client_socket!=client_socket) {
+            if(concatenated!=NULL)
+                send_websocket_frame (clients[i].client_socket ,1, 1, concatenated);
         }
         i++;
     }
     pthread_mutex_unlock(&client_fds_mutex);
 }
 
+
+//it will send private message to the reciever from the sender
+void private_message(int client_socket,uint8_t *username,uint8_t *reciever_username,uint8_t *message)
+{
+    uint8_t* concatenated ;
+    concatenated = concat_with_delimiter(username, message, " - ");
+    concatenated = concat_with_delimiter(concatenated,"(private)", " ");
+
+    pthread_mutex_lock(&client_fds_mutex);
+    int i=0;
+    while(clients[i].client_socket!=-1)
+    {
+        if(strcmp(reciever_username,clients[i].username)==0)
+        {
+            send_websocket_frame (clients[i].client_socket ,1, 1, concatenated);
+            pthread_mutex_unlock(&client_fds_mutex);
+
+            return;
+        }
+        i++;
+    }
+    send_websocket_frame (client_socket ,1, 1, "__usernotfound___");
+    printf("usernotfound\n");
+    pthread_mutex_unlock(&client_fds_mutex);
+
+    return;
+}
+
+
+//it will assign the user name to the client by checking in the clients array
+char * get_username(int client_socket1)
+{
+
+    int flag =0;
+    char *userName;
+    do
+    {
+        flag=0;
+        uint8_t buffer[27];
+        int received = recv(client_socket1, buffer, 1000, 0);
+        buffer[received] = '\0'; 
+        userName=decode_websocket_frame(buffer, received, client_socket1);
+        int i=0;
+        while(clients[i].client_socket !=-1)
+        {
+            if(strcmp(clients[i].username,userName)==0)
+            {
+                flag=1;
+            }
+            i++;
+        }
+        if(flag==1)
+        {
+            send_websocket_frame (client_socket1 ,1, 1, "__fasle__");
+            printf("USER NAME status __false__\n");
+        }
+        
+    } while (flag==1);
+    send_websocket_frame (client_socket1 ,1, 1, "__success__");
+    printf("USER NAME __success__\n");
+    return userName;
+
+}
+
+
+//it will remove socket from the clients array when client is diconnected from the server
+void remove_sock( int remove_sock) 
+{
+
+    int i, found = 0;
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].client_socket == remove_sock) {
+            printf("%s is disconnected\n\n",clients[i].username);
+            found = 1;
+            break;
+        }
+    }
+
+    for (; i < MAX_CLIENTS - 1; i++) {
+        clients[i].client_socket = clients[i + 1].client_socket;
+        if(clients[i + 1].username!=NULL)
+            strcpy(clients[i].username, clients[i + 1].username);
+        else
+        {
+            strcpy(clients[i].username, "");
+            break;
+        }
+    }
+    clients[MAX_CLIENTS - 1].client_socket = -1;
+    if(clients[MAX_CLIENTS - 1].username!=NULL)strcpy(clients[MAX_CLIENTS - 1].username,  "");
+}
+
+// it handle the message came from the clients
+// wheather we have to send it privately or to broadcast
 void *handling_message(void * client_sock)
 {
-    pthread_mutex_lock(&client_fds_mutex);
-    uint8_t buffer[1000];
     int client_socket = *((int *)client_sock);
+    struct userStruct user;
+    user.client_socket=client_socket;
+    user.username=get_username(client_socket);
+    printf("username set to %s \n\n",user.username);
+    uint8_t *username = user.username;
+    // int client_socket = user.client_socket;
+
+
+
+    uint8_t buffer[1000];
+    
+
+    pthread_mutex_lock(&client_fds_mutex);
     // printf("%d\n",client_socket);
     for(int ind =0;ind<MAX_CLIENTS;ind++)
     {
-        if (client_fds[ind]==-1)
+        if (clients[ind].client_socket==-1)
         {
-            client_fds[ind]=client_socket;
+            clients[ind].client_socket=client_socket;
+            clients[ind].username=username;
             break;
         }
     }
@@ -328,28 +465,8 @@ void *handling_message(void * client_sock)
         if (received <= 0) 
         {
             printf("Connection closed by the client\n");
-            if(client_fds[MAX_CLIENTS-1]==client_socket)
-            {
-                client_fds[MAX_CLIENTS-1]=-1;
-            }
-            int flag=0;
-            int ind=0;
-            for(ind =0;ind<MAX_CLIENTS;ind++)
-            {
-                if (flag==1 && client_fds[ind+1]!=-1)
-                {
-                    client_fds[ind]=client_fds[ind+1];
-                    continue;
-                }
-                else if (flag==1 &&  client_fds[ind]==-1) 
-                {
-                    client_fds[ind]==-1;
-                    break;
-                }
-                else if (ind==MAX_CLIENTS-1) client_fds[MAX_CLIENTS-1]=-1;
 
-                if(client_fds[ind]==client_socket) flag=1;
-            }
+            remove_sock(client_socket); 
             close(client_socket);
             break;
         } 
@@ -357,8 +474,40 @@ void *handling_message(void * client_sock)
         {
             buffer[received] = '\0'; 
             uint8_t *message=decode_websocket_frame(buffer, received, client_socket);
-            printf("Recieved Message : %s\n",message);
-            broadcast_message(client_socket,message);
+            if (message==NULL)
+            {
+                remove_sock(client_socket);
+                close(client_socket);
+                pthread_exit(NULL);
+                return NULL;
+            }
+            if(strstr(message,"__broadcast___")!=NULL)
+            {
+
+                message=strstr(message,"___");
+                message+=3;
+                printf("broadcasting %s\n",message);
+                broadcast_message(client_socket,username,message);
+
+            }
+            else
+            {
+
+                char reciever_username[21];
+                message=message+2;
+                int i=0;
+                while (*(message+i)!='_')
+                {
+                    reciever_username[i]=*(message+i);
+                    i++;
+                }
+                reciever_username[i]='\0';
+                message=message+i+3;
+                private_message(client_socket,username,reciever_username,message);
+                printf("sending %s to %s\n",message,reciever_username);
+
+            }
+
         }
     }
     close(client_socket);
@@ -367,22 +516,15 @@ void *handling_message(void * client_sock)
 }
 
 
-
-char * get_username(int client_socket)
-{
-    uint8_t buffer[27];
-    int received = recv(client_socket, buffer, 1000, 0);
-    buffer[received] = '\0'; 
-    return decode_websocket_frame(buffer, received, client_socket);
-
-}
-
-
-
 int main()
 {
-    memset(client_fds, 0xFF, sizeof(client_fds));
+    
     struct sockaddr_in client;
+    for(int ind =0;ind<MAX_CLIENTS;ind++)
+    {
+        clients[ind].client_socket=-1;
+     
+    }
 	int sockfd = socket_creation(); 
     socklen_t len=sizeof(client);
     int client_socket;
@@ -397,10 +539,6 @@ int main()
  
         handle_connection(client_socket);
 
-        char *username=get_username(client_socket);
-        printf("%s \n",username);
-
-
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, handling_message, (void *)&client_socket) < 0) {
             perror("could not create thread");
@@ -411,4 +549,3 @@ int main()
 	return 0;
 
 }
-
