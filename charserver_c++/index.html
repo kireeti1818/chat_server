@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>User Input</title>
+  <style>
+
+    textarea {
+      background-color: rgb(242, 250, 252);
+      resize: none;
+
+    }
+    body
+    {
+      background-color: rgb(245, 254, 255);
+    }
+    #userButton
+    {
+      color: #ffffff;
+			background-color: #76c7ea;
+			font-size: 15px;
+			border: 1px solid #7ae9ff;
+			border-radius: 250px;
+			padding: 5px 50px;
+			cursor: pointer
+    }
+		#sendButton {
+			color: #ffffff;
+			background-color: #76c7ea;
+			font-size: 19px;
+			border: 1px solid #7ae9ff;
+			border-radius: 250px;
+			padding: 15px 50px;
+			cursor: pointer
+		}
+		Button :hover
+    {
+			color: #76c7ea;
+			background-color: #ffffff;
+		}
+    #main_div
+    {
+      margin-top: 10px;
+      background-color: #e3f3fa;
+      height:800px;
+      width: 500px;
+      border: 2px solid black; 
+      padding: 10px;
+
+    }
+    #output {
+      height: 730px;
+      width: 490px; /* Adjusted width to accommodate scrollbar */
+      overflow-y: scroll;
+      overflow-x: hidden; /* Hide horizontal scrollbar */
+      padding-right: 20px; /* Add padding to the right */
+    }
+    #send
+    {
+      display: flex;
+      justify-content: space-between;
+
+    }
+    .sent-message {
+      align-self: flex-start;
+      background-color: #c6e2ff;
+      padding: 5px;
+      margin: 5px;
+      border-radius: 10px;
+      word-wrap: break-word; 
+    }
+    .recieve-message
+    {
+      align-self: flex-start;
+      background-color: #b7faae;
+      padding: 5px;
+      margin: 5px;
+      border-radius: 10px;
+      word-wrap: break-word; 
+    }
+    #username
+    {
+      padding-top :14px;
+      background-color: #e3f3fa;
+      height:50px;
+      width: 520px;
+      border: 2px solid black; 
+    }
+	</style>
+</head>
+<body>
+  
+  <CENTER>
+   
+    <div id ="error"></div>
+    <div id="userNameBox">
+      
+    </div>
+
+    <div id="chatBox">
+    
+  </div>
+  </CENTER>
+  <script src="script.js"></script>
+</body>
+</html>
