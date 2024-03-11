@@ -43,7 +43,7 @@ class ping_pong_handler
 
 
 class encoding_decoding : private ping_pong_handler{
-    protected:
+    public:
         void Base64Encode(char *client_key, char *accept_key) 
         { 
 
@@ -185,13 +185,14 @@ class encoding_decoding : private ping_pong_handler{
 
 
 
-class websocket_frame : public encoding_decoding
+class send_frame 
 {
-    protected:
+    encoding_decoding en_de;
+    public:
         int send_websocket_frame (int client_socket, uint8_t fin, uint8_t opcode, char *payload) 
         {
             uint8_t encoded_data [1024];
-            int encoded_size = encode_websocket_frame (fin, opcode, strlen (payload), (uint8_t *)payload, encoded_data);
+            int encoded_size = en_de.encode_websocket_frame (fin, opcode, strlen (payload), (uint8_t *)payload, encoded_data);
 
             ssize_t bytes_sent = send (client_socket, encoded_data, encoded_size, 0);
             if (bytes_sent == -1) 
@@ -203,10 +204,11 @@ class websocket_frame : public encoding_decoding
         }
 };
 
-class username : public websocket_frame
+class username 
 {
+    encoding_decoding en_de;
+    send_frame send;
     private:
-        
         bool username_checker(int client_socket,string userNameToFind)
         {
             bool found = false;
@@ -218,7 +220,7 @@ class username : public websocket_frame
                 }
             }
             if (found) {
-                send_websocket_frame (client_socket ,1, 1,const_cast<char*>("__false__"));
+                send.send_websocket_frame (client_socket ,1, 1,const_cast<char*>("__false__"));
                 printf("USER NAME status __false__\n");
                 return false;
             } else {
@@ -237,12 +239,12 @@ class username : public websocket_frame
                     return "";
                 }
                 buffer[received] = '\0'; 
-                userName = reinterpret_cast<char*>(decode_websocket_frame(buffer, received, client_socket));
+                userName = reinterpret_cast<char*>(en_de.decode_websocket_frame(buffer, received, client_socket));
             } while (!username_checker(client_socket,userName));
             clients[client_socket] = userName;
             printf("USER NAME status __success__\n");
             printf("username set to %s \n\n", userName.c_str());
-            send_websocket_frame (client_socket ,1, 1,const_cast<char*>("__success__"));
+            send.send_websocket_frame (client_socket ,1, 1,const_cast<char*>("__success__"));
 
             return userName;
         }
@@ -262,6 +264,8 @@ class username : public websocket_frame
 
 class Message : private username
 {
+    encoding_decoding en_de;
+    send_frame send;
     private:
         int private_username_checker(int client_socket,string userNameToFind)
         {
@@ -278,7 +282,7 @@ class Message : private username
             }
             if (flag==true) return socketfd;
             else {
-                send_websocket_frame (client_socket ,1, 1, const_cast<char*>("__usernotfound___"));
+                send.send_websocket_frame (client_socket ,1, 1, const_cast<char*>("__usernotfound___"));
                 printf("usernotfound\n");
                 return -1;
             }
@@ -324,7 +328,7 @@ class Message : private username
 
             return result;
         }
-    public:
+    
 
     void broadcast_message(int client_socket,string username,uint8_t *message)
     {
@@ -334,7 +338,7 @@ class Message : private username
             if(it->first!=client_socket)
             {
                 
-                send_websocket_frame(it->first ,1, 1, (char *)message);
+                send.send_websocket_frame(it->first ,1, 1, (char *)message);
             }
         }
     }
@@ -347,12 +351,13 @@ class Message : private username
         if((reciever_socket_fd=private_username_checker(client_socket,reciever_username))!=-1)
         {
 
-            send_websocket_frame(reciever_socket_fd,1, 1, (char *)message);
+            send.send_websocket_frame(reciever_socket_fd,1, 1, (char *)message);
             return true;
 
         }
         return false;
     }
+    public:
     void * handling_message(void * client_sock)
     {
         
@@ -365,7 +370,7 @@ class Message : private username
         if(userName=="")
         {
             
-            send_websocket_frame (client_socket ,1, 1, const_cast<char*>("__userNameNotSet___"));
+            send.send_websocket_frame (client_socket ,1, 1, const_cast<char*>("__userNameNotSet___"));
             close(client_socket);
             pthread_exit(NULL);
             
@@ -385,7 +390,7 @@ class Message : private username
             else 
             {
                 buffer[received] = '\0'; 
-                uint8_t * message=decode_websocket_frame(buffer, received, client_socket);
+                uint8_t * message=en_de.decode_websocket_frame(buffer, received, client_socket);
                 if (message==NULL)
                 {
                     printf("Connection closed by the client\n");
@@ -482,13 +487,17 @@ private:
 
             return sockfd;
         }
-
-
 };
 
 
-class connection : private encoding_decoding 
+class connection 
 {
+    encoding_decoding en_de;
+    private:
+        struct sockaddr_in client;
+        socklen_t len=sizeof(client);
+        int client_socket;
+        
     protected:
         //over
         void handle_connection(int client_socket)
@@ -524,7 +533,7 @@ class connection : private encoding_decoding
             web_sock_key[ind]='\0';
 
             char encoded_hash[1024];
-            Base64Encode(web_sock_key, encoded_hash);
+            en_de.Base64Encode(web_sock_key, encoded_hash);
             // printf("%s\n", encoded_hash); 
 
             char response[1125] ;
@@ -540,16 +549,6 @@ class connection : private encoding_decoding
                 exit(0);
             }
         }
-};
-
-
-
-class client_accept : private connection{
-    private:
-        struct sockaddr_in client;
-        socklen_t len=sizeof(client);
-        int client_socket;
-    protected:
         int client_accept_function()
         {
             while(1)
@@ -575,7 +574,8 @@ class client_accept : private connection{
         }
 };
 
-class ChatServer: private client_accept{
+
+class ChatServer: private connection{
     public:
     void Startchat(){
         Websocket create;
